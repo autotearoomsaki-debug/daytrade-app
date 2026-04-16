@@ -103,7 +103,7 @@ def supabase_available():
     return bool(_supabase_url()) and bool(st.secrets.get("SUPABASE_KEY", ""))
 
 
-def save_session(trade_date, ticker_code, ticker_name, metrics, trades_df):
+def save_session(trade_date, ticker_code, ticker_name, metrics, trades_df, candle_df=None):
     """トレードセッションをSupabaseに保存する。"""
     url = f"{_supabase_url()}/rest/v1/trade_sessions"
     trades_list = trades_df.copy()
@@ -119,6 +119,11 @@ def save_session(trade_date, ticker_code, ticker_name, metrics, trades_df):
         "trade_count": int(metrics["n_trades"]),
         "trades_json": trades_list.to_dict(orient="records"),
     }
+    # ローソク足データも保存
+    if candle_df is not None and not candle_df.empty:
+        candle_save = candle_df.copy()
+        candle_save.index = candle_save.index.astype(str)
+        payload["candles_json"] = candle_save.reset_index().to_dict(orient="records")
     resp = requests.post(url, headers=_supabase_headers(), json=payload)
     return resp.status_code in (200, 201)
 
@@ -1051,6 +1056,45 @@ def main():
 
                 st.markdown("---")
 
+                # --- Candlestick Charts (from saved data) ---
+                if detail.get("candles_json"):
+                    saved_candles = pd.DataFrame(detail["candles_json"])
+                    # Restore index
+                    if "index" in saved_candles.columns:
+                        saved_candles.index = pd.to_datetime(saved_candles["index"])
+                        saved_candles = saved_candles.drop(columns=["index"])
+                    elif "Datetime" in saved_candles.columns:
+                        saved_candles.index = pd.to_datetime(saved_candles["Datetime"])
+                        saved_candles = saved_candles.drop(columns=["Datetime"])
+                    else:
+                        saved_candles.index = pd.to_datetime(saved_candles.iloc[:, 0])
+                        saved_candles = saved_candles.iloc[:, 1:]
+
+                    # Ensure column names match expected format
+                    col_map = {}
+                    for c in saved_candles.columns:
+                        cl = c.lower()
+                        if cl == "open":
+                            col_map[c] = "Open"
+                        elif cl == "high":
+                            col_map[c] = "High"
+                        elif cl == "low":
+                            col_map[c] = "Low"
+                        elif cl == "close":
+                            col_map[c] = "Close"
+                        elif cl == "volume":
+                            col_map[c] = "Volume"
+                    if col_map:
+                        saved_candles = saved_candles.rename(columns=col_map)
+
+                    fig_candle_hist = chart_candlestick(saved_candles, detail_df, "1分足")
+                    st.plotly_chart(fig_candle_hist, use_container_width=True)
+
+                    fig_1m_hist = chart_candlestick_1m_full(saved_candles, detail_df)
+                    st.plotly_chart(fig_1m_hist, use_container_width=True)
+
+                st.markdown("---")
+
                 # --- Analytics Charts ---
                 col_left, col_right = st.columns(2)
                 with col_left:
@@ -1265,6 +1309,7 @@ def main():
     st.markdown("---")
 
     # --- Candlestick Charts ---
+    candle_1m = None
     if ticker_code:
         trade_date = trades_df["entry_time"].iloc[0].normalize()
 
@@ -1328,7 +1373,7 @@ def main():
         with col_save:
             if st.button("💾 この結果を保存", type="primary", use_container_width=True):
                 td = trades_df["entry_time"].iloc[0].date()
-                ok = save_session(td, ticker_code or code, stock_name or title, m, trades_df)
+                ok = save_session(td, ticker_code or code, stock_name or title, m, trades_df, candle_1m)
                 if ok:
                     st.success("✅ 保存しました！「過去データ」モードで確認できます。")
                 else:
