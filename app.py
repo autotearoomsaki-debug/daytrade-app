@@ -962,32 +962,112 @@ def main():
                 detail_df = pd.DataFrame(detail["trades_json"])
                 detail_df["entry_time"] = pd.to_datetime(detail_df["entry_time"])
                 detail_df["exit_time"] = pd.to_datetime(detail_df["exit_time"])
+                detail_df = detail_df.sort_values("entry_time").reset_index(drop=True)
 
                 dm = calculate_metrics(detail_df)
-                st.markdown(f"### {detail.get('ticker_name', '')} — {detail['trade_date']}")
+                title_d = detail.get("ticker_name", "") or "不明"
+                code_d = detail.get("ticker_code", "") or ""
 
+                # --- Header ---
+                st.markdown(f"## {title_d}")
+                if code_d:
+                    st.caption(code_d)
+
+                # --- Badge row ---
+                badges_html = '<div class="badge-row">'
+                badges_html += badge(f"最大勝ち ¥{dm['max_win']:+,.0f}", "dot-green")
+                badges_html += badge(f"最大負け ¥{dm['max_loss']:+,.0f}", "dot-red")
+                badges_html += badge(f"平均勝ち ¥{dm['avg_win']:+,.0f}", "dot-green")
+                badges_html += badge(f"平均負け ¥{dm['avg_loss']:+,.0f}", "dot-red")
+                badges_html += badge(f"平均保有 {dm['avg_hold_min']:.1f}分", "dot-gray")
+                badges_html += "</div>"
+                st.markdown(badges_html, unsafe_allow_html=True)
+
+                # --- KPI Row 1 ---
                 c1, c2, c3, c4 = st.columns(4)
                 dpnl_color = GREEN if dm["total_pnl"] >= 0 else RED
                 with c1:
-                    st.markdown(metric_card("総損益", f"¥{dm['total_pnl']:+,.0f}", f"{dm['n_trades']}トレード", dpnl_color), unsafe_allow_html=True)
+                    st.markdown(metric_card("総損益", f"¥{dm['total_pnl']:+,.0f}", f"平均 ¥{dm['avg_pnl']:+,.0f}/トレード", dpnl_color), unsafe_allow_html=True)
                 with c2:
-                    st.markdown(metric_card("勝率", f"{dm['win_rate']:.1f}%", f"{dm['n_win']}勝 {dm['n_loss']}敗"), unsafe_allow_html=True)
+                    st.markdown(metric_card("勝率", f"{dm['win_rate']:.1f}%", f"{dm['n_win']}勝 {dm['n_loss']}敗 {dm['n_trades'] - dm['n_win'] - dm['n_loss']}分"), unsafe_allow_html=True)
                 with c3:
-                    pf_color = GREEN if dm["profit_factor"] >= 1 else RED
-                    st.markdown(metric_card("PF", f"{dm['profit_factor']:.2f}", "", pf_color), unsafe_allow_html=True)
+                    st.markdown(metric_card("ペイオフレシオ", f"{dm['payoff_ratio']:.2f}", "平均利益÷平均損失"), unsafe_allow_html=True)
                 with c4:
-                    st.markdown(metric_card("最大DD", f"¥{dm['max_drawdown']:,.0f}", "", RED), unsafe_allow_html=True)
+                    st.markdown(metric_card("トレード数", f"{dm['n_trades']}", f"保有{dm['avg_hold_min']:.1f}分"), unsafe_allow_html=True)
+
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+                # --- KPI Row 2: Donut + PF + DD + Streaks ---
+                c1, c2, c3, c4 = st.columns([1.2, 1, 1.3, 1])
+                with c1:
+                    donut_fig = chart_donut(dm["n_win"], dm["n_loss"])
+                    st.plotly_chart(donut_fig, use_container_width=False, config={"displayModeBar": False})
+                    st.markdown(
+                        f'<div class="donut-center" style="margin-top:-20px;">'
+                        f'<span style="font-size:22px;font-weight:700;color:#fff">{dm["win_rate"]:.1f}%</span><br>'
+                        f'<span style="color:#888;font-size:12px">勝率</span><br>'
+                        f'<span style="color:{GREEN};font-size:12px">■ {dm["n_win"]}勝</span> '
+                        f'<span style="color:{RED};font-size:12px">■ {dm["n_loss"]}敗</span>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                with c2:
+                    pf_color = GREEN if dm["profit_factor"] >= 1 else RED
+                    st.markdown(
+                        metric_card(
+                            "プロフィットファクター", f"{dm['profit_factor']:.2f}",
+                            f'<span style="color:{GREEN}">利益 ¥{dm["gross_profit"]:,.0f}</span><br>'
+                            f'<span style="color:{RED}">損失 ¥{dm["gross_loss"]:,.0f}</span>',
+                            pf_color,
+                        ), unsafe_allow_html=True,
+                    )
+                with c3:
+                    dd_text = f"¥{dm['max_drawdown']:,.0f}"
+                    dd_sub = ""
+                    if dm["dd_start"] is not None:
+                        dd_sub = f"{dm['dd_start'].strftime('%H:%M')} → {dm['dd_end'].strftime('%H:%M')}"
+                    st.markdown(metric_card("最大ドローダウン", dd_text, dd_sub, RED), unsafe_allow_html=True)
+                with c4:
+                    st.markdown(
+                        metric_card(
+                            "連勝 / 連敗",
+                            f'<span style="color:{GREEN}">{dm["max_win_streak"]}</span>'
+                            f'&nbsp;&nbsp;<span style="color:{RED}">{dm["max_loss_streak"]}</span>',
+                            "最大連勝　最大連敗",
+                        ), unsafe_allow_html=True,
+                    )
+
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+                # --- KPI Row 3: PnL rates ---
+                c1, c2, c3 = st.columns(3)
+                rate_color = GREEN if dm["pnl_rate"] >= 0 else RED
+                with c1:
+                    st.markdown(metric_card("損益率", f"{dm['pnl_rate']:+.2f}%", f"IN ¥{dm['total_in']:,.0f} / OUT ¥{dm['total_out']:,.0f}", rate_color), unsafe_allow_html=True)
+                with c2:
+                    st.markdown(metric_card("最大利益率", f"{dm['max_pnl_rate']:+.1f}%", "1トレード最大", GREEN), unsafe_allow_html=True)
+                with c3:
+                    st.markdown(metric_card("最大損失率", f"{dm['min_pnl_rate']:+.1f}%", "1トレード最大", RED), unsafe_allow_html=True)
 
                 st.markdown("---")
 
-                # Charts
-                col_l, col_r = st.columns(2)
-                with col_l:
+                # --- Analytics Charts ---
+                col_left, col_right = st.columns(2)
+                with col_left:
                     st.plotly_chart(chart_pnl_histogram(detail_df), use_container_width=True)
-                with col_r:
+                with col_right:
+                    st.plotly_chart(chart_time_performance(detail_df), use_container_width=True)
+
+                col_left2, col_right2 = st.columns(2)
+                with col_left2:
+                    st.plotly_chart(chart_holding_scatter(detail_df), use_container_width=True)
+                with col_right2:
                     st.plotly_chart(chart_cumulative_pnl(detail_df), use_container_width=True)
 
-                # Trade table
+                st.markdown("---")
+
+                # --- Trade table ---
+                st.subheader("トレード一覧")
                 show_df = detail_df[["entry_time", "exit_time", "side", "shares", "entry_price", "exit_price", "pnl", "pnl_rate", "hold_min"]].copy()
                 show_df.columns = ["エントリー", "エグジット", "売買", "株数", "IN単価", "OUT単価", "損益", "損益率", "保有(分)"]
                 show_df["売買"] = show_df["売買"].map({"short": "空売", "long": "買い"})
