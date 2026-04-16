@@ -6,6 +6,8 @@ from plotly.subplots import make_subplots
 import yfinance as yf
 from datetime import datetime, timedelta
 import warnings
+import json
+import requests
 
 warnings.filterwarnings("ignore")
 
@@ -76,6 +78,74 @@ GREEN = "#4caf50"
 RED = "#ef5350"
 LIGHT_GREEN = "#81c784"
 LIGHT_RED = "#e57373"
+
+
+# ============================================================
+# Supabase helpers
+# ============================================================
+def _supabase_headers():
+    """Supabase REST API用のヘッダーを返す。"""
+    key = st.secrets.get("SUPABASE_KEY", "")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+
+
+def _supabase_url():
+    return st.secrets.get("SUPABASE_URL", "")
+
+
+def supabase_available():
+    """Supabase設定が存在するか。"""
+    return bool(_supabase_url()) and bool(st.secrets.get("SUPABASE_KEY", ""))
+
+
+def save_session(trade_date, ticker_code, ticker_name, metrics, trades_df):
+    """トレードセッションをSupabaseに保存する。"""
+    url = f"{_supabase_url()}/rest/v1/trade_sessions"
+    trades_list = trades_df.copy()
+    trades_list["entry_time"] = trades_list["entry_time"].astype(str)
+    trades_list["exit_time"] = trades_list["exit_time"].astype(str)
+    payload = {
+        "trade_date": str(trade_date),
+        "ticker_code": ticker_code,
+        "ticker_name": ticker_name,
+        "total_pnl": float(metrics["total_pnl"]),
+        "win_rate": float(metrics["win_rate"]),
+        "profit_factor": float(metrics["profit_factor"]),
+        "trade_count": int(metrics["n_trades"]),
+        "trades_json": trades_list.to_dict(orient="records"),
+    }
+    resp = requests.post(url, headers=_supabase_headers(), json=payload)
+    return resp.status_code in (200, 201)
+
+
+def load_sessions():
+    """保存済みセッション一覧を取得。"""
+    url = f"{_supabase_url()}/rest/v1/trade_sessions?select=id,trade_date,ticker_code,ticker_name,total_pnl,win_rate,profit_factor,trade_count,created_at&order=trade_date.desc,created_at.desc"
+    resp = requests.get(url, headers=_supabase_headers())
+    if resp.status_code == 200:
+        return resp.json()
+    return []
+
+
+def load_session_detail(session_id):
+    """指定セッションの詳細（trades_json含む）を取得。"""
+    url = f"{_supabase_url()}/rest/v1/trade_sessions?id=eq.{session_id}&select=*"
+    resp = requests.get(url, headers=_supabase_headers())
+    if resp.status_code == 200 and resp.json():
+        return resp.json()[0]
+    return None
+
+
+def delete_session(session_id):
+    """セッションを削除。"""
+    url = f"{_supabase_url()}/rest/v1/trade_sessions?id=eq.{session_id}"
+    resp = requests.delete(url, headers=_supabase_headers())
+    return resp.status_code in (200, 204)
 
 
 # ============================================================
@@ -752,6 +822,91 @@ def main():
         st.subheader("ローソク足設定")
         candle_interval = st.radio("足種", ["5m", "1m"], horizontal=True, format_func=lambda x: "1分足" if x == "1m" else "5分足")
 
+    # --- Mode tabs ---
+    if supabase_available():
+        mode = st.sidebar.radio("モード", ["📊 新規分析", "📁 過去データ"], horizontal=True)
+    else:
+        mode = "📊 新規分析"
+
+    # --- Past sessions view ---
+    if mode == "📁 過去データ":
+        st.markdown("## 📁 過去のトレード記録")
+        sessions = load_sessions()
+        if not sessions:
+            st.info("保存済みのデータはありません。")
+            return
+
+        for s in sessions:
+            pnl = s["total_pnl"] or 0
+            pnl_color = GREEN if pnl >= 0 else RED
+            col1, col2, col3, col4, col5 = st.columns([1.5, 1, 1, 1, 0.5])
+            with col1:
+                st.markdown(f"**{s['trade_date']}** — {s.get('ticker_name', '')} ({s.get('ticker_code', '')})")
+            with col2:
+                st.markdown(f"<span style='color:{pnl_color};font-weight:700'>¥{pnl:+,.0f}</span>", unsafe_allow_html=True)
+            with col3:
+                st.caption(f"勝率 {s.get('win_rate', 0):.1f}% / PF {s.get('profit_factor', 0):.2f}")
+            with col4:
+                st.caption(f"{s.get('trade_count', 0)}トレード")
+            with col5:
+                if st.button("🗑️", key=f"del_{s['id']}", help="削除"):
+                    delete_session(s["id"])
+                    st.rerun()
+
+        st.markdown("---")
+
+        # Session detail selector
+        session_options = {
+            f"{s['trade_date']} {s.get('ticker_name', '')} ({s.get('ticker_code', '')})": s["id"]
+            for s in sessions
+        }
+        selected_label = st.selectbox("詳細を表示", list(session_options.keys()))
+        if selected_label:
+            detail = load_session_detail(session_options[selected_label])
+            if detail and detail.get("trades_json"):
+                detail_df = pd.DataFrame(detail["trades_json"])
+                detail_df["entry_time"] = pd.to_datetime(detail_df["entry_time"])
+                detail_df["exit_time"] = pd.to_datetime(detail_df["exit_time"])
+
+                dm = calculate_metrics(detail_df)
+                st.markdown(f"### {detail.get('ticker_name', '')} — {detail['trade_date']}")
+
+                c1, c2, c3, c4 = st.columns(4)
+                dpnl_color = GREEN if dm["total_pnl"] >= 0 else RED
+                with c1:
+                    st.markdown(metric_card("総損益", f"¥{dm['total_pnl']:+,.0f}", f"{dm['n_trades']}トレード", dpnl_color), unsafe_allow_html=True)
+                with c2:
+                    st.markdown(metric_card("勝率", f"{dm['win_rate']:.1f}%", f"{dm['n_win']}勝 {dm['n_loss']}敗"), unsafe_allow_html=True)
+                with c3:
+                    pf_color = GREEN if dm["profit_factor"] >= 1 else RED
+                    st.markdown(metric_card("PF", f"{dm['profit_factor']:.2f}", "", pf_color), unsafe_allow_html=True)
+                with c4:
+                    st.markdown(metric_card("最大DD", f"¥{dm['max_drawdown']:,.0f}", "", RED), unsafe_allow_html=True)
+
+                st.markdown("---")
+
+                # Charts
+                col_l, col_r = st.columns(2)
+                with col_l:
+                    st.plotly_chart(chart_pnl_histogram(detail_df), use_container_width=True)
+                with col_r:
+                    st.plotly_chart(chart_cumulative_pnl(detail_df), use_container_width=True)
+
+                # Trade table
+                show_df = detail_df[["entry_time", "exit_time", "side", "shares", "entry_price", "exit_price", "pnl", "pnl_rate", "hold_min"]].copy()
+                show_df.columns = ["エントリー", "エグジット", "売買", "株数", "IN単価", "OUT単価", "損益", "損益率", "保有(分)"]
+                show_df["売買"] = show_df["売買"].map({"short": "空売", "long": "買い"})
+                show_df["損益率"] = show_df["損益率"].apply(lambda x: f"{x*100:+.2f}%")
+                st.dataframe(
+                    show_df.style.applymap(
+                        lambda v: f"color: {GREEN}" if isinstance(v, (int, float)) and v > 0 else (f"color: {RED}" if isinstance(v, (int, float)) and v < 0 else ""),
+                        subset=["損益"],
+                    ).format({"損益": "¥{:+,.0f}", "IN単価": "¥{:,.1f}", "OUT単価": "¥{:,.1f}"}),
+                    use_container_width=True,
+                    height=min(len(show_df) * 38 + 40, 600),
+                )
+        return
+
     if uploaded_file is None and not file_path:
         st.markdown("## 📊 デイトレ振り返りダッシュボード")
         st.info("サイドバーから約定履歴ファイル（xlsx / csv）をアップロードするか、ファイルパスを入力してください。")
@@ -985,6 +1140,19 @@ def main():
         use_container_width=True,
         height=min(len(display_df) * 38 + 40, 600),
     )
+
+    # --- Save to Supabase ---
+    if supabase_available():
+        st.markdown("---")
+        col_save, col_msg = st.columns([1, 3])
+        with col_save:
+            if st.button("💾 この結果を保存", type="primary", use_container_width=True):
+                td = trades_df["entry_time"].iloc[0].date()
+                ok = save_session(td, ticker_code or code, stock_name or title, m, trades_df)
+                if ok:
+                    st.success("✅ 保存しました！「過去データ」モードで確認できます。")
+                else:
+                    st.error("保存に失敗しました。Supabase設定を確認してください。")
 
     # --- Unmatched trades ---
     if unmatched:

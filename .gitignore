@@ -4,3 +4,4 @@ __pycache__/
 *.xlsx
 *.csv
 .env
+.streamlit/secrets.toml
