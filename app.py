@@ -898,7 +898,7 @@ def main():
                 show_df["売買"] = show_df["売買"].map({"short": "空売", "long": "買い"})
                 show_df["損益率"] = show_df["損益率"].apply(lambda x: f"{x*100:+.2f}%")
                 st.dataframe(
-                    show_df.style.applymap(
+                    show_df.style.map(
                         lambda v: f"color: {GREEN}" if isinstance(v, (int, float)) and v > 0 else (f"color: {RED}" if isinstance(v, (int, float)) and v < 0 else ""),
                         subset=["損益"],
                     ).format({"損益": "¥{:+,.0f}", "IN単価": "¥{:,.1f}", "OUT単価": "¥{:,.1f}"}),
@@ -1133,7 +1133,7 @@ def main():
     display_df["損益率"] = display_df["損益率"].apply(lambda x: f"{x*100:+.2f}%")
 
     st.dataframe(
-        display_df.style.applymap(
+        display_df.style.map(
             lambda v: f"color: {GREEN}" if isinstance(v, (int, float)) and v > 0 else (f"color: {RED}" if isinstance(v, (int, float)) and v < 0 else ""),
             subset=["損益"],
         ).format({"損益": "¥{:+,.0f}", "IN単価": "¥{:,.1f}", "OUT単価": "¥{:,.1f}"}),
