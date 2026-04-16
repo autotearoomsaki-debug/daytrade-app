@@ -149,6 +149,89 @@ def delete_session(session_id):
 
 
 # ============================================================
+# Helper: SBI raw text parser
+# ============================================================
+def parse_sbi_raw_text(text):
+    """SBI証券の注文一覧テキストをパースしてDataFrameに変換。
+    取消完了の注文はスキップ。複数約定は加重平均単価で1行に集約。"""
+    import re
+
+    lines = text.strip().split("\n")
+    orders = []
+    current_order = []
+
+    # 注文番号の行で区切る（数字のみの行 or 数字で始まる行）
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # 新しい注文ブロックの開始判定：4桁以上の数字で始まる
+        if re.match(r'^\d{4,}', stripped) and current_order:
+            orders.append(current_order)
+            current_order = [stripped]
+        else:
+            current_order.append(stripped)
+    if current_order:
+        orders.append(current_order)
+
+    rows = []
+    for order_lines in orders:
+        block = "\n".join(order_lines)
+
+        # 取消完了はスキップ
+        if "取消完了" in block and "全部約定" not in block:
+            continue
+
+        # 区分を抽出: 信新売, 信返買, 信新買, 信返売
+        cat_match = re.search(r'(信新売|信返買|信新買|信返売|現物買|現物売)', block)
+        if not cat_match:
+            continue
+        cat = cat_match.group(1)
+
+        # 約定行を抽出: "約定\t市場\tMM/DD\nHH:MM:SS\t株数\t単価" パターン
+        # または "約定\t東証\t04/16\n09:00:00\t500\t33,000"
+        fill_pattern = re.findall(
+            r'約定\s+(?:東証|PTS(?:（[^）]+）)?|SOR)\s+(\d{2}/\d{2})\s*\n?\s*(\d{2}:\d{2}:\d{2})\s+(\d[\d,]*)\s+([\d,]+(?:\.\d+)?)',
+            block
+        )
+        if not fill_pattern:
+            # 別パターン: 同じ行に全部ある場合
+            fill_pattern = re.findall(
+                r'約定\s+(?:東証|PTS(?:（[^）]+）)?|SOR)\s+(\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\d[\d,]*)\s+([\d,]+(?:\.\d+)?)',
+                block
+            )
+
+        if not fill_pattern:
+            continue
+
+        # 約定データを集計（加重平均単価）
+        total_shares = 0
+        weighted_price = 0.0
+        first_datetime = None
+
+        for date_str, time_str, shares_str, price_str in fill_pattern:
+            shares = int(shares_str.replace(",", ""))
+            price = float(price_str.replace(",", ""))
+            total_shares += shares
+            weighted_price += price * shares
+            if first_datetime is None:
+                first_datetime = f"{date_str} {time_str}"
+
+        if total_shares > 0:
+            avg_price = weighted_price / total_shares
+            rows.append({
+                "区分": cat,
+                "注文株数": total_shares,
+                "約定単価": avg_price,
+                "約定日時": first_datetime,
+            })
+
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
+
+
+# ============================================================
 # Helper: parse datetime
 # ============================================================
 def parse_datetimes(series, year=None, fallback_date=None):
@@ -810,10 +893,22 @@ def main():
     # --- Sidebar ---
     with st.sidebar:
         st.header("📊 データ入力")
-        uploaded_file = st.file_uploader("約定履歴ファイル", type=["xlsx", "xls", "csv"])
-        # query params でプリセット可能 (?path=...&ticker=...&name=...)
-        qp = st.query_params
-        file_path = st.text_input("またはファイルパス", value=qp.get("path", ""), placeholder="例: /path/to/trades.xlsx")
+        input_method = st.radio("入力方法", ["📁 ファイル", "📋 テキスト貼り付け"], horizontal=True)
+        if input_method == "📁 ファイル":
+            uploaded_file = st.file_uploader("約定履歴ファイル", type=["xlsx", "xls", "csv"])
+            # query params でプリセット可能 (?path=...&ticker=...&name=...)
+            qp = st.query_params
+            file_path = st.text_input("またはファイルパス", value=qp.get("path", ""), placeholder="例: /path/to/trades.xlsx")
+            raw_text = None
+        else:
+            uploaded_file = None
+            file_path = None
+            qp = st.query_params
+            raw_text = st.text_area(
+                "SBI証券の注文一覧を貼り付け",
+                height=200,
+                placeholder="SBI証券の注文一覧ページからコピー＆ペーストしてください",
+            )
         st.markdown("---")
         ticker_code = st.text_input("銘柄コード", value=qp.get("ticker", ""), placeholder="例: 285A")
         stock_name = st.text_input("銘柄名", value=qp.get("name", ""), placeholder="例: KIOXIA")
@@ -907,14 +1002,19 @@ def main():
                 )
         return
 
-    if uploaded_file is None and not file_path:
+    if not raw_text and uploaded_file is None and not file_path:
         st.markdown("## 📊 デイトレ振り返りダッシュボード")
-        st.info("サイドバーから約定履歴ファイル（xlsx / csv）をアップロードするか、ファイルパスを入力してください。")
+        st.info("サイドバーから約定履歴ファイル（xlsx / csv）をアップロードするか、テキスト貼り付けを使用してください。")
         return
 
     # --- Load Data ---
     try:
-        if uploaded_file is not None:
+        if raw_text:
+            raw = parse_sbi_raw_text(raw_text)
+            if raw is None:
+                st.error("テキストから約定データをパースできませんでした。SBI証券の注文一覧をそのままコピー＆ペーストしてください。")
+                return
+        elif uploaded_file is not None:
             if uploaded_file.name.endswith(".csv"):
                 try:
                     raw = pd.read_csv(uploaded_file, encoding="utf-8")
