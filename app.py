@@ -21,7 +21,7 @@ st.markdown(
     """
 <style>
 /* Hide default Streamlit padding for tighter layout */
-.block-container { padding-top: 1rem; padding-bottom: 0rem; }
+.block-container { padding-top: 2.5rem; padding-bottom: 0rem; }
 
 /* Metric card */
 .mc {
