@@ -878,10 +878,14 @@ def fetch_stock_name(ticker_code):
     try:
         info = yf.Ticker(f"{ticker_code}.T").info
         name = info.get("longName") or info.get("shortName") or ""
-        # 末尾の "Co.,Ltd." などを除去してシンプルに
-        for suffix in [" Co.,Ltd.", " Co., Ltd.", " Corporation", " Holdings", "ホールディングス株式会社", "株式会社"]:
-            name = name.replace(suffix, "")
-        return name.strip()
+        # 末尾の不要な法人種別を繰り返し除去（大文字小文字不問）
+        import re
+        pattern = r'\s*(Co\.,?\s*Ltd\.?|Corporation|Corp\.?|Holdings|Group|Inc\.?|ホールディングス株式会社|株式会社|ホールディングス)$'
+        prev = None
+        while prev != name:
+            prev = name
+            name = re.sub(pattern, "", name, flags=re.IGNORECASE).strip()
+        return name
     except Exception:
         return ""
 
@@ -933,12 +937,19 @@ def main():
         # 銘柄コードが入力されたら自動で銘柄名を取得
         auto_name = ""
         if ticker_code:
-            auto_name = fetch_stock_name(ticker_code)
-        stock_name = st.text_input(
-            "銘柄名",
-            value=auto_name if auto_name else qp.get("name", ""),
-            placeholder="例: KIOXIA",
+            with st.spinner("銘柄名を検索中..."):
+                auto_name = fetch_stock_name(ticker_code)
+            if auto_name:
+                st.caption(f"✅ {auto_name}")
+            else:
+                st.caption("銘柄名が見つかりませんでした")
+        # 手動上書き用（空欄なら自動取得名を使用）
+        stock_name_override = st.text_input(
+            "銘柄名（上書き）",
+            value=qp.get("name", ""),
+            placeholder="空欄なら自動取得",
         )
+        stock_name = stock_name_override if stock_name_override else auto_name
         trade_date_input = st.date_input("取引日（日付が無いデータ用）", value=datetime.now().date())
         st.markdown("---")
         st.subheader("ローソク足設定")
