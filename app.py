@@ -183,8 +183,8 @@ def parse_sbi_raw_text(text):
     for order_lines in orders:
         block = "\n".join(order_lines)
 
-        # 取消完了はスキップ
-        if "取消完了" in block and "全部約定" not in block:
+        # 取消完了はスキップ（ただし一部約定は約定分を含める）
+        if "取消完了" in block and "一部約定" not in block:
             continue
 
         # 区分を抽出: 信新売, 信返買, 信新買, 信返売
@@ -924,9 +924,14 @@ def main():
 
     # --- Mode tabs ---
     if supabase_available():
-        mode = st.sidebar.radio("モード", ["📊 新規分析", "📁 過去データ"], horizontal=True)
+        mode = st.sidebar.radio("モード", ["📊 新規分析", "📁 過去データ", "📈 パターン分析"], horizontal=True)
     else:
-        mode = "📊 新規分析"
+        mode = st.sidebar.radio("モード", ["📊 新規分析", "📈 パターン分析"], horizontal=True)
+
+    # --- Pattern analysis view ---
+    if mode == "📈 パターン分析":
+        render_pattern_analysis()
+        return
 
     # --- Past sessions view ---
     if mode == "📁 過去データ":
@@ -1395,6 +1400,391 @@ def main():
                 "残株数": item["remaining"],
             })
         st.dataframe(pd.DataFrame(um_data), use_container_width=True)
+
+
+# ============================================================
+# Pattern Analysis: decline → sideways → reversal vs continuation
+# ============================================================
+def _calc_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    rs = gain / loss.replace(0, np.nan)
+    return 100 - 100 / (1 + rs)
+
+
+def _calc_vwap(df):
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3
+    return (tp * df["Volume"]).cumsum() / df["Volume"].cumsum()
+
+
+def detect_patterns(df, decline_pct=1.5, sideways_bars=5, sideways_range_pct=0.8, outcome_bars=10, outcome_pct=1.0):
+    """
+    下落→ヨコヨコ→リバ/続落のパターンを検出する。
+    decline_pct: 高値からの下落率(%)で「下落」と見なす閾値
+    sideways_bars: ヨコヨコと見なす最小バー数
+    sideways_range_pct: ヨコヨコ期間の価格レンジ上限(%)
+    outcome_bars: ヨコヨコ終了後に見るバー数
+    outcome_pct: リバ/続落の判定閾値(%)
+    """
+    patterns = []
+    closes = df["Close"].values
+    highs = df["High"].values
+    lows = df["Low"].values
+    volumes = df["Volume"].values
+    n = len(df)
+
+    i = 20
+    while i < n - outcome_bars - sideways_bars:
+        # 直近20バーの高値
+        peak_idx = np.argmax(highs[max(0, i-20):i]) + max(0, i-20)
+        peak_price = highs[peak_idx]
+        current_price = closes[i]
+
+        if peak_price == 0:
+            i += 1
+            continue
+
+        drop_pct = (peak_price - current_price) / peak_price * 100
+
+        if drop_pct < decline_pct:
+            i += 1
+            continue
+
+        # ヨコヨコ検出: i から sideways_bars 以上続く低レンジ期間を探す
+        sideways_end = None
+        for sw_len in range(sideways_bars, min(30, n - i - outcome_bars)):
+            sw_slice = df.iloc[i:i+sw_len]
+            sw_high = sw_slice["High"].max()
+            sw_low = sw_slice["Low"].min()
+            if sw_low == 0:
+                continue
+            sw_range_pct = (sw_high - sw_low) / sw_low * 100
+            if sw_range_pct <= sideways_range_pct:
+                sideways_end = i + sw_len
+            else:
+                break
+
+        if sideways_end is None or sideways_end >= n - outcome_bars:
+            i += 1
+            continue
+
+        # アウトカム判定
+        sw_close = closes[sideways_end - 1]
+        future = closes[sideways_end:min(sideways_end + outcome_bars, n)]
+        if len(future) == 0:
+            i += 1
+            continue
+
+        max_up = (max(future) - sw_close) / sw_close * 100
+        max_down = (sw_close - min(future)) / sw_close * 100
+
+        if max_up >= outcome_pct and max_up > max_down:
+            outcome = "reversal"
+        elif max_down >= outcome_pct and max_down > max_up:
+            outcome = "continuation"
+        else:
+            i = sideways_end + 1
+            continue
+
+        # ヨコヨコ期間のボリューム傾向
+        sw_vols = volumes[i:sideways_end]
+        vol_trend = "増加" if len(sw_vols) > 2 and sw_vols[-1] > sw_vols[0] else "減少"
+
+        patterns.append({
+            "start_idx": i,
+            "peak_idx": peak_idx,
+            "sideways_start": i,
+            "sideways_end": sideways_end,
+            "outcome": outcome,
+            "drop_pct": drop_pct,
+            "sw_range_pct": (df["High"].iloc[i:sideways_end].max() - df["Low"].iloc[i:sideways_end].min()) / df["Low"].iloc[i:sideways_end].min() * 100,
+            "vol_trend": vol_trend,
+            "max_up_pct": max_up,
+            "max_down_pct": max_down,
+        })
+
+        i = sideways_end + outcome_bars
+
+    return patterns
+
+
+def render_pattern_analysis():
+    st.markdown("## 📈 パターン分析 — 下落→ヨコヨコ後のリバ vs 続落")
+
+    col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+    with col_cfg1:
+        ticker_input = st.text_input("銘柄コード (Yahoo Finance)", value="6600.T", placeholder="例: 6600.T")
+    with col_cfg2:
+        analysis_date = st.date_input("分析日", value=datetime.now().date())
+    with col_cfg3:
+        interval = st.radio("足種", ["1m", "5m"], horizontal=True, format_func=lambda x: "1分足" if x == "1m" else "5分足")
+
+    with st.expander("検出パラメータ", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        decline_pct = c1.slider("下落判定(%)", 0.5, 5.0, 1.5, 0.1)
+        sideways_bars = c2.slider("ヨコヨコ最小バー数", 3, 20, 5)
+        sideways_range = c3.slider("ヨコヨコ幅上限(%)", 0.2, 2.0, 0.8, 0.1)
+        outcome_bars = c4.slider("判定バー数", 5, 30, 10)
+
+    if not st.button("🔍 分析開始", type="primary"):
+        st.info("銘柄コードと日付を選択して「分析開始」を押してください。\n\nキオクシアは `6600.T`、1分足で当日を選択するのがおすすめです。")
+        _show_pattern_guide()
+        return
+
+    # データ取得
+    start_dt = datetime.combine(analysis_date, datetime.min.time())
+    end_dt = start_dt + timedelta(days=1)
+
+    with st.spinner("データ取得中..."):
+        try:
+            tk = yf.Ticker(ticker_input)
+            df = tk.history(start=start_dt, end=end_dt, interval=interval)
+        except Exception as e:
+            st.error(f"データ取得エラー: {e}")
+            return
+
+    if df is None or df.empty:
+        st.warning("データが取得できませんでした。銘柄コードや日付を確認してください。")
+        return
+
+    # タイムゾーン正規化
+    if df.index.tz is not None:
+        df.index = df.index.tz_convert("Asia/Tokyo")
+    df = df.between_time("09:00", "15:30")
+
+    if df.empty:
+        st.warning("取引時間内のデータがありません。")
+        return
+
+    df["RSI"] = _calc_rsi(df["Close"])
+    df["VWAP"] = _calc_vwap(df)
+    df["MA5"] = df["Close"].rolling(5).mean()
+    df["MA25"] = df["Close"].rolling(25).mean()
+
+    # パターン検出
+    patterns = detect_patterns(df, decline_pct=decline_pct, sideways_bars=sideways_bars,
+                               sideways_range_pct=sideways_range, outcome_bars=outcome_bars)
+
+    reversals = [p for p in patterns if p["outcome"] == "reversal"]
+    continuations = [p for p in patterns if p["outcome"] == "continuation"]
+
+    st.markdown(f"**検出結果**: リバ {len(reversals)}件 / 続落 {len(continuations)}件")
+
+    if not patterns:
+        st.info("パターンが検出されませんでした。パラメータを緩めてみてください。")
+        _show_full_chart(df, [], ticker_input)
+        _show_pattern_guide()
+        return
+
+    # 全体チャート（パターン位置をハイライト）
+    _show_full_chart(df, patterns, ticker_input)
+
+    # 統計比較
+    _show_pattern_stats(reversals, continuations)
+
+    # 個別パターン詳細
+    st.markdown("### 個別パターン詳細")
+    tab_labels = [f"{'🔼 リバ' if p['outcome']=='reversal' else '🔽 続落'} #{i+1}" for i, p in enumerate(patterns)]
+    if tab_labels:
+        tabs = st.tabs(tab_labels)
+        for tab, pattern in zip(tabs, patterns):
+            with tab:
+                _show_pattern_detail(df, pattern, ticker_input)
+
+    _show_pattern_guide()
+
+
+def _show_full_chart(df, patterns, ticker):
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                        row_heights=[0.6, 0.2, 0.2],
+                        vertical_spacing=0.03)
+
+    # ローソク足
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"],
+        increasing_line_color=GREEN, decreasing_line_color=RED,
+        name="価格", showlegend=False,
+    ), row=1, col=1)
+
+    # VWAP
+    fig.add_trace(go.Scatter(x=df.index, y=df["VWAP"], name="VWAP",
+                             line=dict(color="#ff9800", width=1.5, dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA5"], name="MA5",
+                             line=dict(color="#64b5f6", width=1)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA25"], name="MA25",
+                             line=dict(color="#ce93d8", width=1)), row=1, col=1)
+
+    # パターン区間をハイライト
+    for p in patterns:
+        color = "rgba(76,175,80,0.12)" if p["outcome"] == "reversal" else "rgba(239,83,80,0.12)"
+        border = GREEN if p["outcome"] == "reversal" else RED
+        label = "🔼 リバ" if p["outcome"] == "reversal" else "🔽 続落"
+        x0 = df.index[p["sideways_start"]]
+        x1 = df.index[min(p["sideways_end"], len(df)-1)]
+        fig.add_vrect(x0=x0, x1=x1, fillcolor=color, line_color=border,
+                      line_width=1, opacity=1, row=1, col=1)
+        fig.add_annotation(x=x0, y=df["High"].iloc[p["sideways_start"]:p["sideways_end"]+1].max(),
+                           text=label, showarrow=False, font=dict(color=border, size=11), row=1, col=1)
+
+    # 出来高
+    colors = [GREEN if c >= o else RED for c, o in zip(df["Close"], df["Open"])]
+    fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=colors,
+                         name="出来高", showlegend=False), row=2, col=1)
+
+    # RSI
+    fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI",
+                             line=dict(color="#ffd54f", width=1.5)), row=3, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="rgba(76,175,80,0.5)", row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="rgba(239,83,80,0.5)", row=3, col=1)
+
+    fig.update_layout(**CHART_LAYOUT, height=600, title=f"{ticker} 全体チャート",
+                      xaxis_rangeslider_visible=False)
+    fig.update_yaxes(title_text="RSI", row=3, col=1, range=[0, 100])
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _show_pattern_detail(df, pattern, ticker):
+    sw_start = pattern["sideways_start"]
+    sw_end = pattern["sideways_end"]
+    outcome = pattern["outcome"]
+
+    # 表示範囲: ピーク-10バー ～ ヨコヨコ終了+15バー
+    view_start = max(0, pattern["peak_idx"] - 10)
+    view_end = min(len(df), sw_end + 15)
+    sub = df.iloc[view_start:view_end]
+
+    outcome_label = "🔼 リバ（反発）" if outcome == "reversal" else "🔽 続落"
+    color = GREEN if outcome == "reversal" else RED
+
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1.metric("判定", outcome_label)
+    col_m2.metric("下落幅", f"{pattern['drop_pct']:.1f}%")
+    col_m3.metric("ヨコヨコ幅", f"{pattern['sw_range_pct']:.2f}%")
+    col_m4.metric("ヨコヨコ中の出来高", pattern["vol_trend"])
+
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                        row_heights=[0.55, 0.25, 0.2],
+                        vertical_spacing=0.04)
+
+    fig.add_trace(go.Candlestick(
+        x=sub.index, open=sub["Open"], high=sub["High"],
+        low=sub["Low"], close=sub["Close"],
+        increasing_line_color=GREEN, decreasing_line_color=RED,
+        name="価格", showlegend=False,
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(x=sub.index, y=sub["VWAP"], name="VWAP",
+                             line=dict(color="#ff9800", width=1.5, dash="dot")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=sub.index, y=sub["MA5"], name="MA5",
+                             line=dict(color="#64b5f6", width=1)), row=1, col=1)
+
+    # ヨコヨコ区間ハイライト
+    x0 = df.index[sw_start]
+    x1 = df.index[min(sw_end, len(df)-1)]
+    fig.add_vrect(x0=x0, x1=x1,
+                  fillcolor="rgba(76,175,80,0.1)" if outcome == "reversal" else "rgba(239,83,80,0.1)",
+                  line_color=color, line_width=1.5, opacity=1, annotation_text="ヨコヨコ", row=1, col=1)
+
+    # ピーク注釈
+    if view_start <= pattern["peak_idx"] < view_end:
+        peak_x = df.index[pattern["peak_idx"]]
+        fig.add_vline(x=peak_x, line_dash="dash", line_color="#888", row=1, col=1)
+        fig.add_annotation(x=peak_x, y=df["High"].iloc[pattern["peak_idx"]],
+                           text="天井", showarrow=True, arrowcolor="#888",
+                           font=dict(color="#888", size=11), row=1, col=1)
+
+    # 出来高
+    colors = [GREEN if c >= o else RED for c, o in zip(sub["Close"], sub["Open"])]
+    fig.add_trace(go.Bar(x=sub.index, y=sub["Volume"], marker_color=colors,
+                         name="出来高", showlegend=False), row=2, col=1)
+
+    # RSI
+    fig.add_trace(go.Scatter(x=sub.index, y=sub["RSI"], name="RSI",
+                             line=dict(color="#ffd54f", width=1.5)), row=3, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="rgba(76,175,80,0.5)", row=3, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="rgba(239,83,80,0.5)", row=3, col=1)
+
+    fig.update_layout(**CHART_LAYOUT, height=500,
+                      title=f"{'リバパターン' if outcome=='reversal' else '続落パターン'} — 下落{pattern['drop_pct']:.1f}%",
+                      xaxis_rangeslider_visible=False)
+    fig.update_yaxes(title_text="RSI", row=3, col=1, range=[0, 100])
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _show_pattern_stats(reversals, continuations):
+    if not reversals and not continuations:
+        return
+
+    st.markdown("### リバ vs 続落 — 統計比較")
+    col_r, col_c = st.columns(2)
+
+    def stat_block(patterns, label, color):
+        if not patterns:
+            st.info(f"{label}のパターンなし")
+            return
+        drop_avg = np.mean([p["drop_pct"] for p in patterns])
+        sw_range_avg = np.mean([p["sw_range_pct"] for p in patterns])
+        vol_inc = sum(1 for p in patterns if p["vol_trend"] == "増加")
+        move_avg = np.mean([p["max_up_pct"] if p["outcome"] == "reversal" else p["max_down_pct"] for p in patterns])
+
+        st.markdown(f"""
+<div class="mc">
+  <div class="label">{label}</div>
+  <div class="value" style="color:{color}; font-size:22px;">{len(patterns)}件</div>
+  <div style="margin-top:10px; font-size:13px; color:#ccc;">
+    📉 平均下落幅: <b>{drop_avg:.1f}%</b><br>
+    ↔ ヨコヨコ幅: <b>{sw_range_avg:.2f}%</b><br>
+    📊 ヨコヨコ中に出来高増加: <b>{vol_inc}/{len(patterns)}件</b><br>
+    🎯 平均値動き: <b>{move_avg:.1f}%</b>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    with col_r:
+        stat_block(reversals, "🔼 リバ（反発）", GREEN)
+    with col_c:
+        stat_block(continuations, "🔽 続落", RED)
+
+
+
+def _show_pattern_guide():
+    st.markdown("---")
+    st.markdown("### 📖 リバ vs 続落の見分け方")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown(f"""
+<div class="mc">
+  <div class="label">🔼 リバサイン</div>
+  <div style="margin-top:10px; font-size:13px; color:#ccc; line-height:1.8;">
+    ✅ <b>RSI 30以下</b>から反転上昇<br>
+    ✅ ヨコヨコ中に<b>出来高が徐々に増加</b><br>
+    ✅ 下ヒゲ多め（<b>ハンマー足</b>出現）<br>
+    ✅ <b>VWAPが近くで支持</b>として機能<br>
+    ✅ ヨコヨコ中の<b>安値が切り上がっている</b><br>
+    ✅ 時間帯: 前場10:00前後や後場寄り<br>
+    ✅ 板に<b>買い圧力が入りはじめる</b>
+  </div>
+</div>""", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+<div class="mc">
+  <div class="label">🔽 続落サイン</div>
+  <div style="margin-top:10px; font-size:13px; color:#ccc; line-height:1.8;">
+    ❌ RSIが30〜40で<b>戻り切れない</b><br>
+    ❌ ヨコヨコ中に<b>出来高が枯れている</b><br>
+    ❌ <b>VWAPを一度も回復できない</b><br>
+    ❌ <b>高値が切り下がって</b>いる（デッドキャット）<br>
+    ❌ 上ヒゲ多め（<b>上値を抑えられている</b>）<br>
+    ❌ 時間帯: 後場14:00以降の軟調<br>
+    ❌ 板に<b>戻り売りが並ぶ</b>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    st.markdown("""
+---
+**💡 ポイント**: キオクシアのような値動きの大きい銘柄では、ヨコヨコ中の **出来高の質（買い方 vs 売り方）** と **VWAPとの位置関係** が最も重要な判断材料になります。
+単純な出来高増加だけでなく、**どちらの方向に動いた後に出来高が出るか**（上に動いたときに多い → リバ方向）を確認するのが効果的です。
+""")
 
 
 if __name__ == "__main__":
