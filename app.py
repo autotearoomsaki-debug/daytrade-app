@@ -872,6 +872,20 @@ def chart_cumulative_pnl(trades_df):
 # Fetch candle data from yfinance
 # ============================================================
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=86400)
+def fetch_stock_name(ticker_code):
+    """yfinance から銘柄名を取得（1日キャッシュ）"""
+    try:
+        info = yf.Ticker(f"{ticker_code}.T").info
+        name = info.get("longName") or info.get("shortName") or ""
+        # 末尾の "Co.,Ltd." などを除去してシンプルに
+        for suffix in [" Co.,Ltd.", " Co., Ltd.", " Corporation", " Holdings", "ホールディングス株式会社", "株式会社"]:
+            name = name.replace(suffix, "")
+        return name.strip()
+    except Exception:
+        return ""
+
+
 def fetch_candles(ticker_code, trade_date, interval="1m"):
     """yfinance から日本株のローソク足データを取得"""
     symbol = f"{ticker_code}.T"
@@ -916,7 +930,15 @@ def main():
             )
         st.markdown("---")
         ticker_code = st.text_input("銘柄コード", value=qp.get("ticker", ""), placeholder="例: 285A")
-        stock_name = st.text_input("銘柄名", value=qp.get("name", ""), placeholder="例: KIOXIA")
+        # 銘柄コードが入力されたら自動で銘柄名を取得
+        auto_name = ""
+        if ticker_code:
+            auto_name = fetch_stock_name(ticker_code)
+        stock_name = st.text_input(
+            "銘柄名",
+            value=auto_name if auto_name else qp.get("name", ""),
+            placeholder="例: KIOXIA",
+        )
         trade_date_input = st.date_input("取引日（日付が無いデータ用）", value=datetime.now().date())
         st.markdown("---")
         st.subheader("ローソク足設定")
