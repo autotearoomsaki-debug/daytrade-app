@@ -872,20 +872,36 @@ def chart_cumulative_pnl(trades_df):
 # Fetch candle data from yfinance
 # ============================================================
 @st.cache_data(ttl=300)
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, show_spinner=False)
 def fetch_stock_name(ticker_code):
     """yfinance から銘柄名を取得（1日キャッシュ）"""
-    try:
-        info = yf.Ticker(f"{ticker_code}.T").info
-        name = info.get("longName") or info.get("shortName") or ""
-        # 末尾の不要な法人種別を繰り返し除去（大文字小文字不問）
-        import re
-        pattern = r'\s*(Co\.,?\s*Ltd\.?|Corporation|Corp\.?|Holdings|Group|Inc\.?|ホールディングス株式会社|株式会社|ホールディングス)$'
+    import re
+    pattern = r'\s*(Co\.?,?\s*Ltd\.?|LTD\.?|Corporation|Corp\.?|Holdings|Group|Inc\.?|ホールディングス株式会社|株式会社|ホールディングス)$'
+
+    def clean(name):
         prev = None
         while prev != name:
             prev = name
             name = re.sub(pattern, "", name, flags=re.IGNORECASE).strip()
         return name
+
+    # yf.Search を優先（.info より安定）
+    try:
+        results = yf.Search(ticker_code, max_results=3).quotes
+        for q in results:
+            sym = q.get("symbol", "")
+            if sym == f"{ticker_code}.T" or sym == ticker_code:
+                name = q.get("shortname") or q.get("longname") or ""
+                if name:
+                    return clean(name)
+    except Exception:
+        pass
+
+    # フォールバック: .info
+    try:
+        info = yf.Ticker(f"{ticker_code}.T").info
+        name = info.get("longName") or info.get("shortName") or ""
+        return clean(name)
     except Exception:
         return ""
 
