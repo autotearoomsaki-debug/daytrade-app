@@ -4,3 +4,4 @@ numpy>=1.24.0
 plotly>=5.18.0
 yfinance>=0.2.30
 openpyxl>=3.1.0
+beautifulsoup4>=4.12.0

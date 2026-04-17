@@ -874,18 +874,24 @@ def chart_cumulative_pnl(trades_df):
 @st.cache_data(ttl=300)
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_stock_name(ticker_code):
-    """yfinance から銘柄名を取得（1日キャッシュ）"""
+    """kabutan から日本語銘柄名を取得（1日キャッシュ）。失敗時は yfinance 英語名にフォールバック。"""
     import re
-    pattern = r'\s*(Co\.?,?\s*Ltd\.?|LTD\.?|Corporation|Corp\.?|Holdings|Group|Inc\.?|ホールディングス株式会社|株式会社|ホールディングス)$'
+    from bs4 import BeautifulSoup
 
-    def clean(name):
-        prev = None
-        while prev != name:
-            prev = name
-            name = re.sub(pattern, "", name, flags=re.IGNORECASE).strip()
-        return name
+    # kabutan から日本語名を取得（優先）
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        r = requests.get(f"https://kabutan.jp/stock/?code={ticker_code}", headers=headers, timeout=5)
+        soup = BeautifulSoup(r.text, "html.parser")
+        h1 = soup.find("h1")
+        if h1:
+            name = re.sub(r"\s*\(.*?\).*$", "", h1.text.strip())
+            if name:
+                return name
+    except Exception:
+        pass
 
-    # yf.Search を優先（.info より安定）
+    # フォールバック: yf.Search（英語名）
     try:
         results = yf.Search(ticker_code, max_results=3).quotes
         for q in results:
@@ -893,17 +899,11 @@ def fetch_stock_name(ticker_code):
             if sym == f"{ticker_code}.T" or sym == ticker_code:
                 name = q.get("shortname") or q.get("longname") or ""
                 if name:
-                    return clean(name)
+                    return name
     except Exception:
         pass
 
-    # フォールバック: .info
-    try:
-        info = yf.Ticker(f"{ticker_code}.T").info
-        name = info.get("longName") or info.get("shortName") or ""
-        return clean(name)
-    except Exception:
-        return ""
+    return ""
 
 
 def fetch_candles(ticker_code, trade_date, interval="1m"):
