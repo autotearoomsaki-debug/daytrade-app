@@ -81,13 +81,12 @@ LIGHT_RED = "#e57373"
 
 # ローソク足チャート用インタラクション設定（TradingView風）
 CHART_CONFIG = {
-    "scrollZoom": True,          # マウスホイールでズーム
-    "displayModeBar": True,      # ツールバー表示
-    "modeBarButtonsToRemove": [  # 不要なボタンを非表示
-        "select2d", "lasso2d", "autoScale2d", "toggleSpikelines",
+    "scrollZoom": True,
+    "displayModeBar": True,
+    "modeBarButtonsToRemove": [
+        "select2d", "lasso2d", "toggleSpikelines",
         "hoverClosestCartesian", "hoverCompareCartesian",
     ],
-    "modeBarButtonsToAdd": ["pan2d", "zoom2d", "zoomIn2d", "zoomOut2d", "resetScale2d"],
     "displaylogo": False,
 }
 
@@ -730,17 +729,29 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         **CHART_LAYOUT,
         title=f"チャート（売買ポイント付き） - {interval_label}",
         xaxis_rangeslider_visible=False,
-        xaxis2_title="時刻",
+        xaxis2=dict(
+            title="時刻",
+            rangeslider=dict(
+                visible=True,
+                thickness=0.06,
+                bgcolor="#1a1a2e",
+                bordercolor="#444",
+                borderwidth=1,
+            ),
+            type="category",
+            nticks=15,
+        ),
         yaxis_title="株価",
         yaxis2_title="出来高",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
-        height=600,
+        height=650,
         dragmode="pan",
     )
     fig.update_xaxes(type="category", nticks=15, row=1, col=1)
-    fig.update_xaxes(type="category", nticks=15, row=2, col=1)
-    fig.update_yaxes(fixedrange=False)
+    # Y軸: ドラッグで上下スケール調整可能
+    fig.update_yaxes(fixedrange=False, row=1, col=1)
+    fig.update_yaxes(fixedrange=True, row=2, col=1)
     return fig
 
 
@@ -860,17 +871,28 @@ def chart_candlestick_1m_full(candle_df, trades_df):
         **CHART_LAYOUT,
         title="1分足チャート（全場） — IN / OUT",
         xaxis_rangeslider_visible=False,
-        xaxis2_title="時刻",
+        xaxis2=dict(
+            title="時刻",
+            rangeslider=dict(
+                visible=True,
+                thickness=0.05,
+                bgcolor="#1a1a2e",
+                bordercolor="#444",
+                borderwidth=1,
+            ),
+            type="category",
+            nticks=30,
+        ),
         yaxis_title="株価",
         yaxis2_title="出来高",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
-        height=700,
+        height=750,
         dragmode="pan",
     )
     fig.update_xaxes(type="category", nticks=30, row=1, col=1)
-    fig.update_xaxes(type="category", nticks=30, row=2, col=1)
-    fig.update_yaxes(fixedrange=False)
+    fig.update_yaxes(fixedrange=False, row=1, col=1)
+    fig.update_yaxes(fixedrange=True, row=2, col=1)
     return fig
 
 
