@@ -69,9 +69,19 @@ st.markdown(
 CHART_LAYOUT = dict(
     template="plotly_dark",
     paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color="#ccc", size=12),
+    plot_bgcolor="#131722",          # TradingView背景色
+    font=dict(color="#b2b5be", size=12),
     margin=dict(l=50, r=20, t=36, b=50),
+)
+
+# ローソク足チャート専用グリッド設定
+CANDLE_AXIS_STYLE = dict(
+    gridcolor="#1e222d",             # 薄いグリッド線
+    gridwidth=1,
+    zerolinecolor="#2a2e39",
+    showgrid=True,
+    tickfont=dict(color="#787b86", size=11),
+    linecolor="#2a2e39",
 )
 
 GREEN = "#4caf50"
@@ -647,10 +657,15 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
             high=candle_df["High"],
             low=candle_df["Low"],
             close=candle_df["Close"],
-            increasing_line_color=GREEN,
-            decreasing_line_color=RED,
-            increasing_fillcolor=GREEN,
-            decreasing_fillcolor=RED,
+            increasing=dict(
+                line=dict(color="#26a69a", width=1),
+                fillcolor="#26a69a",
+            ),
+            decreasing=dict(
+                line=dict(color="#ef5350", width=1),
+                fillcolor="#ef5350",
+            ),
+            whiskerwidth=0.3,
             name="",
         ),
         row=1,
@@ -659,7 +674,7 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
 
     # Volume
     vol_colors = [
-        GREEN if c >= o else RED
+        "#26a69a" if c >= o else "#ef5350"
         for c, o in zip(candle_df["Close"], candle_df["Open"])
     ]
     fig.add_trace(
@@ -758,9 +773,10 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         height=650,
         dragmode="pan",
     )
-    fig.update_xaxes(type="category", nticks=15, row=1, col=1)
-    fig.update_yaxes(fixedrange=False, row=1, col=1)
-    fig.update_yaxes(fixedrange=True, row=2, col=1)
+    fig.update_xaxes(type="category", nticks=15, row=1, col=1, **CANDLE_AXIS_STYLE)
+    fig.update_xaxes(type="category", nticks=15, row=2, col=1, **CANDLE_AXIS_STYLE)
+    fig.update_yaxes(fixedrange=False, row=1, col=1, **CANDLE_AXIS_STYLE)
+    fig.update_yaxes(fixedrange=True, row=2, col=1, **CANDLE_AXIS_STYLE)
     return fig
 
 
@@ -794,17 +810,22 @@ def chart_candlestick_1m_full(candle_df, trades_df):
             high=candle_df["High"],
             low=candle_df["Low"],
             close=candle_df["Close"],
-            increasing_line_color=GREEN,
-            decreasing_line_color=RED,
-            increasing_fillcolor=GREEN,
-            decreasing_fillcolor=RED,
+            increasing=dict(
+                line=dict(color="#26a69a", width=1),
+                fillcolor="#26a69a",
+            ),
+            decreasing=dict(
+                line=dict(color="#ef5350", width=1),
+                fillcolor="#ef5350",
+            ),
+            whiskerwidth=0.3,
             name="",
         ),
         row=1, col=1,
     )
 
     # Volume
-    vol_colors = [GREEN if c >= o else RED for c, o in zip(candle_df["Close"], candle_df["Open"])]
+    vol_colors = ["#26a69a" if c >= o else "#ef5350" for c, o in zip(candle_df["Close"], candle_df["Open"])]
     fig.add_trace(
         go.Bar(x=candle_df["time_label"], y=candle_df["Volume"],
                marker_color=vol_colors, opacity=0.4, name=""),
@@ -907,9 +928,10 @@ def chart_candlestick_1m_full(candle_df, trades_df):
         height=750,
         dragmode="pan",
     )
-    fig.update_xaxes(type="category", nticks=30, row=1, col=1)
-    fig.update_yaxes(fixedrange=False, row=1, col=1)
-    fig.update_yaxes(fixedrange=True, row=2, col=1)
+    fig.update_xaxes(type="category", nticks=30, row=1, col=1, **CANDLE_AXIS_STYLE)
+    fig.update_xaxes(type="category", nticks=30, row=2, col=1, **CANDLE_AXIS_STYLE)
+    fig.update_yaxes(fixedrange=False, row=1, col=1, **CANDLE_AXIS_STYLE)
+    fig.update_yaxes(fixedrange=True, row=2, col=1, **CANDLE_AXIS_STYLE)
     return fig
 
 
