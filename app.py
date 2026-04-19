@@ -79,6 +79,18 @@ RED = "#ef5350"
 LIGHT_GREEN = "#81c784"
 LIGHT_RED = "#e57373"
 
+# ローソク足チャート用インタラクション設定（TradingView風）
+CHART_CONFIG = {
+    "scrollZoom": True,          # マウスホイールでズーム
+    "displayModeBar": True,      # ツールバー表示
+    "modeBarButtonsToRemove": [  # 不要なボタンを非表示
+        "select2d", "lasso2d", "autoScale2d", "toggleSpikelines",
+        "hoverClosestCartesian", "hoverCompareCartesian",
+    ],
+    "modeBarButtonsToAdd": ["pan2d", "zoom2d", "zoomIn2d", "zoomOut2d", "resetScale2d"],
+    "displaylogo": False,
+}
+
 
 # ============================================================
 # Supabase helpers
@@ -724,9 +736,11 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
         height=600,
+        dragmode="pan",
     )
     fig.update_xaxes(type="category", nticks=15, row=1, col=1)
     fig.update_xaxes(type="category", nticks=15, row=2, col=1)
+    fig.update_yaxes(fixedrange=False)
     return fig
 
 
@@ -852,9 +866,11 @@ def chart_candlestick_1m_full(candle_df, trades_df):
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
         height=700,
+        dragmode="pan",
     )
     fig.update_xaxes(type="category", nticks=30, row=1, col=1)
     fig.update_xaxes(type="category", nticks=30, row=2, col=1)
+    fig.update_yaxes(fixedrange=False)
     return fig
 
 
@@ -1162,10 +1178,10 @@ def main():
                         saved_candles = saved_candles.rename(columns=col_map)
 
                     fig_candle_hist = chart_candlestick(saved_candles, detail_df, "1分足")
-                    st.plotly_chart(fig_candle_hist, use_container_width=True)
+                    st.plotly_chart(fig_candle_hist, use_container_width=True, config=CHART_CONFIG)
 
                     fig_1m_hist = chart_candlestick_1m_full(saved_candles, detail_df)
-                    st.plotly_chart(fig_1m_hist, use_container_width=True)
+                    st.plotly_chart(fig_1m_hist, use_container_width=True, config=CHART_CONFIG)
 
                 st.markdown("---")
 
@@ -1392,7 +1408,7 @@ def main():
         if candle_data is not None and not candle_data.empty:
             interval_label = "1分足" if candle_interval == "1m" else "5分足"
             fig_candle = chart_candlestick(candle_data, trades_df, interval_label)
-            st.plotly_chart(fig_candle, use_container_width=True)
+            st.plotly_chart(fig_candle, use_container_width=True, config=CHART_CONFIG)
         else:
             st.warning(
                 f"ローソク足データを取得できませんでした（{ticker_code}.T / {candle_interval}）。"
@@ -1403,7 +1419,7 @@ def main():
         candle_1m = fetch_candles(ticker_code, trade_date, interval="1m")
         if candle_1m is not None and not candle_1m.empty:
             fig_1m = chart_candlestick_1m_full(candle_1m, trades_df)
-            st.plotly_chart(fig_1m, use_container_width=True)
+            st.plotly_chart(fig_1m, use_container_width=True, config=CHART_CONFIG)
 
     st.markdown("---")
 
