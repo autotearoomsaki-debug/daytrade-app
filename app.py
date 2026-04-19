@@ -587,6 +587,24 @@ def _add_sma_traces(fig, candle_df, row=1, col=1):
         )
 
 
+def _add_vwap_trace(fig, candle_df, row=1, col=1):
+    """ローソク足チャートにVWAPを追加"""
+    typical = (candle_df["High"] + candle_df["Low"] + candle_df["Close"]) / 3
+    vol = candle_df["Volume"]
+    vwap = (typical * vol).cumsum() / vol.cumsum()
+    fig.add_trace(
+        go.Scatter(
+            x=candle_df["time_label"],
+            y=vwap,
+            mode="lines",
+            line=dict(color="#ff6b6b", width=1.5, dash="dot"),
+            name="VWAP",
+            hovertemplate="VWAP: ¥%{y:,.0f}<extra></extra>",
+        ),
+        row=row, col=col,
+    )
+
+
 # ============================================================
 # Chart: Candlestick with trade markers
 # ============================================================
@@ -645,8 +663,9 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         col=1,
     )
 
-    # SMA
+    # SMA + VWAP
     _add_sma_traces(fig, candle_df, row=1, col=1)
+    _add_vwap_trace(fig, candle_df, row=1, col=1)
 
     # Entry/Exit markers — 売り=↓オレンジ 買い=↑シアン
     SELL_CLR = "#ff9800"  # オレンジ
@@ -758,8 +777,9 @@ def chart_candlestick_1m_full(candle_df, trades_df):
         row=2, col=1,
     )
 
-    # SMA
+    # SMA + VWAP
     _add_sma_traces(fig, candle_df, row=1, col=1)
+    _add_vwap_trace(fig, candle_df, row=1, col=1)
 
     # 高視認性カラー（チャートの赤緑と被らない）
     SELL_COLOR = "#ff9800"   # オレンジ — 売り
