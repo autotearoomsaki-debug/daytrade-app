@@ -745,10 +745,12 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
             title="株価",
             fixedrange=False,
             side="left",
-            mirror=True,        # 右側にも軸線を表示
+            mirror=True,
             showline=True,
             linewidth=1,
             linecolor="#444",
+            tickformat=",d",
+            separatethousands=True,
         ),
         yaxis2_title="出来高",
         showlegend=True,
