@@ -81,7 +81,7 @@ LIGHT_RED = "#e57373"
 
 # ローソク足チャート用インタラクション設定（TradingView風）
 CHART_CONFIG = {
-    "scrollZoom": True,
+    "scrollZoom": False,
     "displayModeBar": True,
     "modeBarButtonsToRemove": [
         "select2d", "lasso2d", "toggleSpikelines",
@@ -726,7 +726,7 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         )
 
     fig.update_layout(
-        **CHART_LAYOUT,
+        **{**CHART_LAYOUT, "margin": dict(l=70, r=70, t=36, b=50)},
         title=f"チャート（売買ポイント付き） - {interval_label}",
         xaxis_rangeslider_visible=False,
         xaxis2=dict(
@@ -741,7 +741,15 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
             type="category",
             nticks=15,
         ),
-        yaxis_title="株価",
+        yaxis=dict(
+            title="株価",
+            fixedrange=False,
+            side="left",
+            mirror=True,        # 右側にも軸線を表示
+            showline=True,
+            linewidth=1,
+            linecolor="#444",
+        ),
         yaxis2_title="出来高",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
@@ -749,7 +757,6 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         dragmode="pan",
     )
     fig.update_xaxes(type="category", nticks=15, row=1, col=1)
-    # Y軸: ドラッグで上下スケール調整可能
     fig.update_yaxes(fixedrange=False, row=1, col=1)
     fig.update_yaxes(fixedrange=True, row=2, col=1)
     return fig
@@ -868,7 +875,7 @@ def chart_candlestick_1m_full(candle_df, trades_df):
         )
 
     fig.update_layout(
-        **CHART_LAYOUT,
+        **{**CHART_LAYOUT, "margin": dict(l=70, r=70, t=36, b=50)},
         title="1分足チャート（全場） — IN / OUT",
         xaxis_rangeslider_visible=False,
         xaxis2=dict(
@@ -883,7 +890,15 @@ def chart_candlestick_1m_full(candle_df, trades_df):
             type="category",
             nticks=30,
         ),
-        yaxis_title="株価",
+        yaxis=dict(
+            title="株価",
+            fixedrange=False,
+            side="left",
+            mirror=True,
+            showline=True,
+            linewidth=1,
+            linecolor="#444",
+        ),
         yaxis2_title="出来高",
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
