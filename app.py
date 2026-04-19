@@ -726,7 +726,7 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         )
 
     fig.update_layout(
-        **{**CHART_LAYOUT, "margin": dict(l=70, r=70, t=36, b=50)},
+        **{**CHART_LAYOUT, "margin": dict(l=70, r=110, t=36, b=50)},
         title=f"チャート（売買ポイント付き） - {interval_label}",
         xaxis_rangeslider_visible=False,
         xaxis2=dict(
@@ -752,7 +752,7 @@ def chart_candlestick(candle_df, trades_df, interval_label="1分足"):
         ),
         yaxis2_title="出来高",
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+        legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=1.02, font=dict(size=11), bgcolor="rgba(0,0,0,0.5)", bordercolor="#444", borderwidth=1),
         height=650,
         dragmode="pan",
     )
@@ -875,7 +875,7 @@ def chart_candlestick_1m_full(candle_df, trades_df):
         )
 
     fig.update_layout(
-        **{**CHART_LAYOUT, "margin": dict(l=70, r=70, t=36, b=50)},
+        **{**CHART_LAYOUT, "margin": dict(l=70, r=110, t=36, b=50)},
         title="1分足チャート（全場） — IN / OUT",
         xaxis_rangeslider_visible=False,
         xaxis2=dict(
@@ -901,7 +901,7 @@ def chart_candlestick_1m_full(candle_df, trades_df):
         ),
         yaxis2_title="出来高",
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
+        legend=dict(orientation="v", yanchor="top", y=0.99, xanchor="left", x=1.02, font=dict(size=11), bgcolor="rgba(0,0,0,0.5)", bordercolor="#444", borderwidth=1),
         height=750,
         dragmode="pan",
     )
